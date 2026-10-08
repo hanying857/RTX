@@ -7271,19 +7271,15 @@ end
 ]====]
 
 
+-- ============================================================
+-- 通用加载器：把每个 chunk 的 require 换成执行器提供的那个
+-- ============================================================
 local function _log(msg)
-    pcall(function()
-        warn(tostring(msg))
-    end)
-    pcall(function()
-        print(tostring(msg))
-    end)
+    pcall(function() warn(tostring(msg)) end)
+    pcall(function() print(tostring(msg)) end)
 end
 
 local function runPart(name, src)
-    -- loadstring 出来的 chunk 属于"非 RobloxScript 上下文", 直接 require 游戏的 ModuleScript
-    -- 会报 "Cannot require a RobloxScript module from a non RobloxScript context"。
-    -- 必须在每个 chunk 开头把 require 换成执行器提供的那个。
     local preamble = "local require = (getgenv and getgenv().require) or require\n"
     local fn, lerr = loadstring(preamble .. src, "=" .. name)
     if not fn then
@@ -7292,310 +7288,130 @@ local function runPart(name, src)
     end
     local ok, err = pcall(fn)
     if not ok then
-        -- 原来这里直接把错误吞掉只 return false, 导致只能从 Roblox 日志里反推是哪一段挂了
         _log("[runPart] " .. name .. " 运行出错: " .. tostring(err))
         return false
     end
     return true
 end
 
-
-
-local AUTH_URL   = "http://qinscript.lol/api/card/verify"   
-local AUTH_BYPASS_ON_FAIL = false                                
-
-local CARD_FILE = "DexPlusPlusSetting.json"  
-
-
-local function urlenc(s)
-    local ok, enc = pcall(function() return game:GetService("HttpService"):UrlEncode(tostring(s)) end)
-    if ok and enc then return enc end
-    return tostring(s)
-end
-
-
-local function getHwid()
-    local ok, cid = pcall(function()
-        return game:GetService("RbxAnalyticsService"):GetClientId()
-    end)
-    if ok and cid and cid ~= "" then return tostring(cid) end
-    local uid = game:GetService("Players").LocalPlayer.UserId or 0
-    return "FALLBACK_" .. tostring(uid)
-end
-
-
-local function getUsername()
-    local plr = game:GetService("Players").LocalPlayer
-    if plr and plr.Name then return tostring(plr.Name) end
-    return ""
-end
-
-
-
-local function verifyCard(key, hwid, username)
-    local keyStr = tostring(key or "")
-    if AUTH_BYPASS_ON_FAIL and keyStr == "" then
-        return true, "占位模式（未输入卡密），已放行"
-    end
-    local url = AUTH_URL .. "?key=" .. urlenc(keyStr)
-        .. "&hwid=" .. urlenc(tostring(hwid))
-        .. "&username=" .. urlenc(username or "")
-    local ok, result = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if not ok or not result then
-        if AUTH_BYPASS_ON_FAIL then return true, "占位模式（服务器未就绪），已放行" end
-        return false, "网络错误，无法连接验证服务器"
-    end
-    if string.find(result, "OK", 1, true) then
-        return true, "卡密有效"
-    end
-    return false, (result ~= "" and result or "卡密无效")
-end
-
-
-local function loadSavedCardKey()
-    if writefile and readfile then
-        local ok, data = pcall(readfile, CARD_FILE)
-        if ok and data then
-            data = string.gsub(tostring(data), "%s", "")
-            if data ~= "" then return data end
-        end
-    end
-    return nil
-end
-
-
-local function saveCardKey(key)
-    if writefile then
-        pcall(writefile, CARD_FILE, tostring(key))
-    end
-end
-
-
-local function askCardKey(callback)
+-- ============================================================
+-- 启动菜单 UI（无卡密，纯选择）
+-- ============================================================
+local function createLauncherMenu(onDone)
     local lp = game:GetService("Players").LocalPlayer
     local pg = lp and lp:FindFirstChild("PlayerGui")
     if not pg then
-        return callback(nil)
+        return onDone({main=true, main2=true, main3=true, auto=true, blueprint=true})
     end
 
     local sg = Instance.new("ScreenGui")
-    sg.Name = "QSnowCardKey"
+    sg.Name = "QSnowLauncher"
     sg.ResetOnSpawn = false
-    sg.Parent = pg
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pcall(function() sg.Parent = game:GetService("CoreGui") end)
+    if not sg.Parent then sg.Parent = pg end
 
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 300, 0, 118)
-    frame.Position = UDim2.new(1, -312, 0, 12)
-    frame.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
-    frame.BorderSizePixel = 0
-    frame.Parent = sg
-    local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 10); corner.Parent = frame
+    -- 背景
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(0, 340, 0, 400)
+    bg.Position = UDim2.new(0.5, 0, 0.5, 0)
+    bg.AnchorPoint = Vector2.new(0.5, 0.5)
+    bg.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    bg.BorderSizePixel = 0
+    bg.Parent = sg
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 12)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(60, 60, 85)
+    stroke.Thickness = 1
+    stroke.Parent = bg
 
+    -- 标题
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -24, 0, 26)
-    title.Position = UDim2.new(0, 12, 0, 8)
+    title.Size = UDim2.new(1, -20, 0, 36)
+    title.Position = UDim2.new(0, 10, 0, 14)
     title.BackgroundTransparency = 1
-    title.Font = Enum.Font.SourceSansBold
-    title.TextSize = 15
+    title.Text = "木材大亨2 - 启动菜单"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.TextSize = 18
+    title.Font = Enum.Font.GothamBold
     title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "输入卡密"
-    title.Parent = frame
+    title.Parent = bg
 
-    local box = Instance.new("TextBox")
-    box.Size = UDim2.new(0, 276, 0, 32)
-    box.Position = UDim2.new(0, 12, 0, 38)
-    box.PlaceholderText = "请输入卡密"
-    box.Text = ""
-    box.ClearTextOnFocus = false
-    box.BackgroundColor3 = Color3.fromRGB(40, 40, 46)
-    box.TextColor3 = Color3.fromRGB(255, 255, 255)
-    box.TextSize = 15
-    box.Font = Enum.Font.SourceSans
-    box.BorderSizePixel = 0
-    box.Parent = frame
-    local boxCorner = Instance.new("UICorner"); boxCorner.CornerRadius = UDim.new(0, 6); boxCorner.Parent = box
+    -- 副标题
+    local sub = Instance.new("TextLabel")
+    sub.Size = UDim2.new(1, -20, 0, 18)
+    sub.Position = UDim2.new(0, 10, 0, 50)
+    sub.BackgroundTransparency = 1
+    sub.Text = "勾选需要加载的模块，点击开始加载"
+    sub.TextColor3 = Color3.fromRGB(150, 150, 165)
+    sub.TextSize = 12
+    sub.Font = Enum.Font.Gotham
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+    sub.Parent = bg
 
-    local okBtn = Instance.new("TextButton")
-    okBtn.Size = UDim2.new(0, 126, 0, 30)
-    okBtn.Position = UDim2.new(0, 12, 0, 80)
-    okBtn.BackgroundColor3 = Color3.fromRGB(0, 168, 90)
-    okBtn.Text = "确认"
-    okBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    okBtn.TextSize = 14
-    okBtn.BorderSizePixel = 0
-    okBtn.AutoButtonColor = true
-    okBtn.Parent = frame
-    local okCorner = Instance.new("UICorner"); okCorner.CornerRadius = UDim.new(0, 6); okCorner.Parent = okBtn
+    -- 模块选项
+    local opts = {
+        {key="main",      label="主脚本（玩家/传送/斧头/拖拽）"},
+        {key="main2",     label="主脚本2（UI 面板：主要/环境/针对）"},
+        {key="main3",     label="主脚本3（鸭子/商店/物品整理）"},
+        {key="auto",      label="自动购买（所有商店商品）"},
+        {key="blueprint", label="蓝图工具（保存/放置/填充）"},
+    }
+    local checked = {main=true, main2=true, main3=true, auto=true, blueprint=true}
+    local yOffset = 80
 
-    local noBtn = Instance.new("TextButton")
-    noBtn.Size = UDim2.new(0, 126, 0, 30)
-    noBtn.Position = UDim2.new(0, 146, 0, 80)
-    noBtn.BackgroundColor3 = Color3.fromRGB(92, 92, 98)
-    noBtn.Text = "取消"
-    noBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    noBtn.TextSize = 14
-    noBtn.BorderSizePixel = 0
-    noBtn.AutoButtonColor = true
-    noBtn.Parent = frame
-    local noCorner = Instance.new("UICorner"); noCorner.CornerRadius = UDim.new(0, 6); noCorner.Parent = noBtn
+    for _, opt in ipairs(opts) do
+        local cb = Instance.new("TextButton")
+        cb.Size = UDim2.new(1, -20, 0, 34)
+        cb.Position = UDim2.new(0, 10, 0, yOffset)
+        cb.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        cb.BorderSizePixel = 0
+        cb.Text = "☑  " .. opt.label
+        cb.TextColor3 = Color3.fromRGB(220, 220, 230)
+        cb.TextSize = 13
+        cb.Font = Enum.Font.Gotham
+        cb.TextXAlignment = Enum.TextXAlignment.Left
+        cb.AutoButtonColor = true
+        cb.Parent = bg
+        Instance.new("UICorner", cb).CornerRadius = UDim.new(0, 6)
 
-    local done = false
-    local function finish(v)
-        if done then return end
-        done = true
-        sg:Destroy()
-        callback(v)
-    end
-
-    okBtn.MouseButton1Click:Connect(function() finish(box.Text) end)
-    noBtn.MouseButton1Click:Connect(function() finish(nil) end)
-end
-
-
-local function askLoadBlueprint(callback)
-    local lp = game:GetService("Players").LocalPlayer
-    local pg = lp and lp:FindFirstChild("PlayerGui")
-    if not pg then
-        return callback(false)
-    end
-
-    local sg = Instance.new("ScreenGui")
-    sg.Name = "QSnowConfirm"
-    sg.ResetOnSpawn = false
-    sg.Parent = pg
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 300, 0, 110)
-    frame.Position = UDim2.new(1, -312, 0, 12)
-    frame.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
-    frame.BorderSizePixel = 0
-    frame.Parent = sg
-    local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 10); corner.Parent = frame
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -24, 0, 26)
-    title.Position = UDim2.new(0, 12, 0, 8)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.SourceSansBold
-    title.TextSize = 15
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "是否加载蓝图功能？(第一次体验N/A小时)"
-    title.Parent = frame
-
-    local countLabel = Instance.new("TextLabel")
-    countLabel.Size = UDim2.new(1, -24, 0, 20)
-    countLabel.Position = UDim2.new(0, 12, 0, 36)
-    countLabel.BackgroundTransparency = 1
-    countLabel.Font = Enum.Font.SourceSans
-    countLabel.TextSize = 13
-    countLabel.TextColor3 = Color3.fromRGB(185, 185, 190)
-    countLabel.TextXAlignment = Enum.TextXAlignment.Left
-    countLabel.Text = "15 秒后自动关闭"
-    countLabel.Parent = frame
-
-    local okBtn = Instance.new("TextButton")
-    okBtn.Size = UDim2.new(0, 126, 0, 30)
-    okBtn.Position = UDim2.new(0, 12, 0, 62)
-    okBtn.BackgroundColor3 = Color3.fromRGB(0, 168, 90)
-    okBtn.Text = "加载蓝图"
-    okBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    okBtn.TextSize = 14
-    okBtn.BorderSizePixel = 0
-    okBtn.AutoButtonColor = true
-    okBtn.Parent = frame
-    local okCorner = Instance.new("UICorner"); okCorner.CornerRadius = UDim.new(0, 6); okCorner.Parent = okBtn
-
-    local noBtn = Instance.new("TextButton")
-    noBtn.Size = UDim2.new(0, 126, 0, 30)
-    noBtn.Position = UDim2.new(0, 146, 0, 62)
-    noBtn.BackgroundColor3 = Color3.fromRGB(92, 92, 98)
-    noBtn.Text = "不加载"
-    noBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    noBtn.TextSize = 14
-    noBtn.BorderSizePixel = 0
-    noBtn.AutoButtonColor = true
-    noBtn.Parent = frame
-    local noCorner = Instance.new("UICorner"); noCorner.CornerRadius = UDim.new(0, 6); noCorner.Parent = noBtn
-
-    local done = false
-    local function finish(v)
-        if done then return end
-        done = true
-        sg:Destroy()
-        callback(v)
-    end
-
-    okBtn.MouseButton1Click:Connect(function() finish(true) end)
-    noBtn.MouseButton1Click:Connect(function() finish(false) end)
-
-    task.spawn(function()
-        local remaining = 15
-        while remaining > 0 and not done do
-            countLabel.Text = tostring(remaining) .. " 秒后自动关闭"
-            task.wait(1)
-            remaining = remaining - 1
-        end
-        finish(false)
-    end)
-end
-
-
-
-runPart("主脚本", SRC_MAIN)
-runPart("主脚本2", SRC_MAIN2)
-runPart("主脚本3", SRC_MAIN3)
-runPart("自动购买", SRC_AUTO)
-
-
-local hwid = getHwid()
-local username = getUsername()
-local savedKey = loadSavedCardKey()
-
-askLoadBlueprint(function(confirmed)
-    if not confirmed then return end
-
-    
-    if savedKey and savedKey ~= "" then
-        local ok, msg = verifyCard(savedKey, hwid, username)
-        if ok then
-            runPart("蓝图工具", SRC_BP)
-            return
-        end
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "卡密验证失败",
-                Text = tostring(msg),
-                Duration = 6,
-            })
+        cb.MouseButton1Click:Connect(function()
+            checked[opt.key] = not checked[opt.key]
+            cb.Text = (checked[opt.key] and "☑  " or "☐  ") .. opt.label
+            cb.TextColor3 = checked[opt.key]
+                and Color3.fromRGB(220, 220, 230)
+                or Color3.fromRGB(120, 120, 135)
         end)
-        savedKey = nil  
+
+        yOffset = yOffset + 40
     end
 
-    askCardKey(function(key)
-        if key == nil then return end  
+    -- 开始加载按钮
+    local loadBtn = Instance.new("TextButton")
+    loadBtn.Size = UDim2.new(1, -20, 0, 40)
+    loadBtn.Position = UDim2.new(0, 10, 1, -52)
+    loadBtn.BackgroundColor3 = Color3.fromRGB(0, 168, 90)
+    loadBtn.BorderSizePixel = 0
+    loadBtn.Text = "开始加载"
+    loadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    loadBtn.TextSize = 15
+    loadBtn.Font = Enum.Font.GothamBold
+    loadBtn.Parent = bg
+    Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 8)
 
-        local keyStr = string.gsub(tostring(key), "%s", "")
-
-        
-        local ok, msg = verifyCard(keyStr, hwid, username)
-        if not ok then
-            pcall(function()
-                game:GetService("StarterGui"):SetCore("SendNotification", {
-                    Title = "验证失败",
-                    Text = tostring(msg),
-                    Duration = 6,
-                })
-            end)
-            return
-        end
-
-        if keyStr ~= "" then
-            saveCardKey(keyStr)  
-        end
-        runPart("蓝图工具", SRC_BP)
+    loadBtn.MouseButton1Click:Connect(function()
+        sg:Destroy()
+        onDone(checked)
     end)
+end
+
+-- ============================================================
+-- 启动：显示菜单 → 按选择加载模块（不需要卡密）
+-- ============================================================
+createLauncherMenu(function(opts)
+    if opts.main      then runPart("主脚本",     SRC_MAIN)     end
+    if opts.main2     then runPart("主脚本2",    SRC_MAIN2)    end
+    if opts.main3     then runPart("主脚本3",    SRC_MAIN3)    end
+    if opts.auto      then runPart("自动购买",   SRC_AUTO)     end
+    if opts.blueprint then runPart("蓝图工具",   SRC_BP)       end
 end)
